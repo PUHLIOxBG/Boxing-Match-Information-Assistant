@@ -5,17 +5,15 @@ from datetime import date
 from typing import Optional
 
 import html
-import inspect
 from urllib.parse import urlencode
 
-import pandas as pd
 import streamlit as st
 
-import report_builder as rb
+import auto_report as ar
 
 DEMO_MODE = "Demo search"
 FREE_MODE = "Free source discovery"
-REPORT_MODE = "Build verified report"
+AUTO_MODE = "Automatic match report"
 
 
 @dataclass(frozen=True)
@@ -83,7 +81,7 @@ def find_fight(fighter_a: str, fighter_b: str, selected_date: Optional[date]) ->
 
 
 def badge(status: str) -> str:
-    colors = {"Confirmed": "#147a4b", "Corroborated": "#1f6db3", "Single source": "#8a5a00", "Review": "#8a5a00", "Unavailable": "#5c6470", "Conflicting": "#b8322f", "Official": "#147a4b", "Unverified": "#b8322f"}
+    colors = {"Confirmed": "#147a4b", "Corroborated": "#1f6db3", "Single source": "#8a5a00", "Review": "#8a5a00", "Unavailable": "#5c6470", "Conflicting": "#b8322f", "Official": "#147a4b", "Established media": "#1f6db3", "Reference": "#5c6470", "Not found": "#5c6470"}
     color = colors.get(status, "#5c6470")
     return f"<span style='background:{color};color:white;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700'>{status}</span>"
 
@@ -133,220 +131,153 @@ def render_free_discovery() -> None:
     st.caption("Search results are not verified evidence. Review each source against the operator’s own settlement rules.")
 
 
-REPORT_DEFAULTS = {
-    "report_boxer_a": "", "report_boxer_b": "", "report_event_date": None, "report_event_name": "", "report_venue": "", "report_country": "",
-    "report_outcome": "Unknown", "report_method": rb.METHOD_NOT_RECORDED, "report_method_other": "", "report_round_stopped": None,
-    "report_stopping_time": "", "report_scheduled_rounds": None, "report_weight_class": "", "report_titles": "", "report_referee": "",
-    **{f"report_card_{i}": "" for i in range(1, 4)},
-    **{f"report_judge_{i}": "" for i in range(1, 4)},
-    **{f"report_src_{i}_{field}": "" for i in range(1, rb.MAX_SOURCES + 1) for field in ("name", "url")},
-    **{f"report_src_{i}_conf": "Unverified" for i in range(1, rb.MAX_SOURCES + 1)},
-}
-KD_SAVED_KEY = "report_kd_saved"
-# Newer Streamlit versions can show empty number cells as blank instead of "None".
-KD_EDITOR_EXTRA = {"placeholder": ""} if "placeholder" in inspect.signature(st.data_editor).parameters else {}
-KD_COLUMNS = {"knocked_down": "Fighter knocked down", "scored_by": "Scored by", "round": "Round", "count": "Count", "source_url": "Source URL", "notes": "Notes"}
+STATUS_HELP = ("Confirmed = stated by an official source (sanctioning body, commission or promoter). "
+               "Corroborated = two or more independent publishers agree. Single source = one publisher only. "
+               "Conflicting = sources disagree. Not found = no source read by the app stated it.")
 
 
-def empty_knockdowns() -> pd.DataFrame:
-    text, number = [""] * rb.MAX_KNOCKDOWNS, [None] * rb.MAX_KNOCKDOWNS
-    return pd.DataFrame({
-        "knocked_down": pd.Series(text, dtype="object"),
-        "scored_by": pd.Series(text, dtype="object"),
-        "round": pd.Series(number, dtype="float64"),
-        "count": pd.Series(number, dtype="float64"),
-        "source_url": pd.Series(text, dtype="object"),
-        "notes": pd.Series(text, dtype="object"),
-    })
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=64)
+def cached_match_report(fighter_a: str, fighter_b: str, event_date: date, event_name: str) -> ar.MatchReport:
+    return ar.find_match_report(fighter_a, fighter_b, event_date, event_name)
 
 
-def keep_report_state() -> None:
-    # Re-assigning widget values keeps the draft report while another mode is shown.
-    for key in REPORT_DEFAULTS:
-        if key in st.session_state:
-            st.session_state[key] = st.session_state[key]
+def source_links(report: ar.MatchReport, ids: list[int]) -> str:
+    by_id = {s.id: s for s in report.sources}
+    links = [f"<a href='{html.escape(by_id[i].url, quote=True)}' target='_blank' rel='noopener noreferrer'>[{i}] {html.escape(by_id[i].name)}</a>"
+             for i in ids if i in by_id]
+    return "<br>".join(links) or "—"
 
 
-def clear_report() -> None:
-    for key in [*REPORT_DEFAULTS, KD_SAVED_KEY, "report_kd_editor"]:
-        st.session_state.pop(key, None)
+def render_auto_report() -> None:
+    st.warning("**Automatic match reports assist manual settlement only — they do not settle any market.** "
+               "Every fact links to the page it came from. Open and check the sources before settling.")
+    st.caption("Free retrieval: Wikipedia boxer records plus public site-search and news RSS feeds from sanctioning bodies, a promoter and "
+               "established boxing media. No API key, account, card, database or AI. robots.txt is respected; search engines, social "
+               "networks and login-gated sites are never accessed. Search snippets are only used to find articles, never as evidence.")
+
+    with st.form("automatic-match-report"):
+        left, middle, right = st.columns([1, 1, 0.8])
+        fighter_a = left.text_input("Boxer A", placeholder="e.g. Isaac Cruz")
+        fighter_b = middle.text_input("Boxer B", placeholder="e.g. Nestor Bravo")
+        event_date = right.date_input("Event / offered date", value=date(2026, 9, 20))
+        event_name = st.text_input("Event name (optional)", placeholder="e.g. Cruz vs Bravo")
+        submitted = st.form_submit_button("Find match report", type="primary", use_container_width=True)
+
+    if not submitted:
+        st.info("Enter both boxers and the event date, then select **Find match report**. A lookup usually takes 15–30 seconds.")
+        return
+    if not fighter_a.strip() or not fighter_b.strip():
+        st.error("Please enter both boxer names.")
+        return
+
+    with st.spinner("Searching public sources — this usually takes 15–30 seconds…"):
+        try:
+            report = cached_match_report(fighter_a.strip(), fighter_b.strip(), event_date, event_name.strip())
+        except Exception:  # noqa: BLE001 - the lookup is designed not to raise; this is a final safety net
+            report = None
+    if report is None:
+        st.error("Automatic retrieval failed unexpectedly. Use the manual source links below.")
+    else:
+        render_found_report(report)
+
+    st.markdown("### Manual source links (fallback)")
+    st.caption("Open these yourself if a field is Not found, Single source or Conflicting.")
+    for label, query, url in build_source_links(fighter_a, fighter_b, event_date, event_name):
+        with st.container(border=True):
+            st.markdown(f"{badge('Unverified manual source link')} &nbsp; <a href='{html.escape(url, quote=True)}' target='_blank' rel='noopener noreferrer'><strong>{html.escape(label)}</strong> ↗</a>", unsafe_allow_html=True)
+            st.caption(f"Search: {query}")
 
 
-def render_report_builder() -> None:
-    for key, value in REPORT_DEFAULTS.items():
-        st.session_state.setdefault(key, value)
-    if KD_SAVED_KEY not in st.session_state:
-        st.session_state[KD_SAVED_KEY] = empty_knockdowns()
-    state = st.session_state
-
-    st.error(f"**{rb.DISCLAIMER}**", icon="⚠️")
-    st.caption("Enter facts only after reviewing the sources yourself. The draft stays in this browser session; nothing is fetched, scraped or stored on a server.")
-
-    with st.container(border=True):
-        st.markdown("#### 1. Match identity")
-        c1, c2, c3 = st.columns([1, 1, 0.8])
-        c1.text_input("Boxer A", key="report_boxer_a", placeholder="e.g. Isaac Cruz")
-        c2.text_input("Boxer B", key="report_boxer_b", placeholder="e.g. Nestor Bravo")
-        c3.date_input("Event date", key="report_event_date")
-        c1, c2, c3 = st.columns([1, 1, 0.8])
-        c1.text_input("Event name", key="report_event_name", placeholder="e.g. Cruz vs Bravo")
-        c2.text_input("Venue", key="report_venue", placeholder="e.g. Pechanga Arena, San Diego")
-        c3.text_input("Country", key="report_country", placeholder="e.g. USA")
-
-    a, b = state["report_boxer_a"].strip(), state["report_boxer_b"].strip()
-    outcome_labels = {"Boxer A wins": f"Winner: {a or 'Boxer A'}", "Boxer B wins": f"Winner: {b or 'Boxer B'}"}
-
-    with st.container(border=True):
-        st.markdown("#### 2. Official result")
-        c1, c2, c3 = st.columns(3)
-        c1.selectbox("Result", rb.OUTCOMES, key="report_outcome", format_func=lambda o: outcome_labels.get(o, o))
-        c2.selectbox("Method", rb.METHODS, key="report_method")
-        c3.number_input("Scheduled rounds", key="report_scheduled_rounds", min_value=1, max_value=15, step=1, placeholder="e.g. 12")
-        if state["report_method"] == "Other":
-            st.text_input("Describe the method", key="report_method_other", placeholder="e.g. Overturned to no decision")
-        c1, c2, c3 = st.columns(3)
-        c1.number_input("Round stopped", key="report_round_stopped", min_value=1, max_value=15, step=1, placeholder="Stoppages only")
-        c2.text_input("Stopping time", key="report_stopping_time", placeholder="m:ss, e.g. 2:31")
-        c3.text_input("Weight class", key="report_weight_class", placeholder="e.g. Super Lightweight")
-        st.text_input("Titles", key="report_titles", placeholder="e.g. WBC Interim Super Lightweight title, or —")
-
-    with st.container(border=True):
-        st.markdown("#### 3. Decision scorecards")
-        st.caption("Optional — enter each judge's card as published, e.g. 116–112 Cruz.")
-        for i, col in enumerate(st.columns(3), start=1):
-            col.text_input(f"Scorecard {i}", key=f"report_card_{i}", placeholder="e.g. 116–112")
-
-    with st.container(border=True):
-        st.markdown("#### 4. Knockdowns")
-        st.caption(f"Up to {rb.MAX_KNOCKDOWNS} entries. Leave unused rows empty. Only record official or clearly sourced knockdowns.")
-        edited = st.data_editor(
-            state[KD_SAVED_KEY],
-            key="report_kd_editor",
-            num_rows="fixed",
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "knocked_down": st.column_config.TextColumn(KD_COLUMNS["knocked_down"], help="Boxer who went down"),
-                "scored_by": st.column_config.TextColumn(KD_COLUMNS["scored_by"], help="Boxer credited with the knockdown"),
-                "round": st.column_config.NumberColumn(KD_COLUMNS["round"], min_value=1, max_value=15, step=1, format="%d"),
-                "count": st.column_config.NumberColumn(KD_COLUMNS["count"], min_value=0, max_value=10, step=1, format="%d", help="Referee's count, if reported"),
-                "source_url": st.column_config.LinkColumn(KD_COLUMNS["source_url"], validate=r"^https?://.+"),
-                "notes": st.column_config.TextColumn(KD_COLUMNS["notes"]),
-            },
-            **KD_EDITOR_EXTRA,
-        )
-        # Fixed rows, so re-applying the editor's edits to the saved copy is idempotent.
-        state[KD_SAVED_KEY] = edited
-
-    with st.container(border=True):
-        st.markdown("#### 5. Officials")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.text_input("Referee", key="report_referee")
-        for i, col in enumerate((c2, c3, c4), start=1):
-            col.text_input(f"Judge {i}", key=f"report_judge_{i}")
-
-    with st.container(border=True):
-        st.markdown("#### 6. Evidence")
-        st.caption("Official = commission, sanctioning body or promoter result. Corroborated = reputable independent report. Unverified = anything else.")
-        for i in range(1, rb.MAX_SOURCES + 1):
-            c1, c2, c3 = st.columns([1, 1.6, 0.8])
-            c1.text_input(f"Source {i} name", key=f"report_src_{i}_name", placeholder="e.g. NJ commission results PDF")
-            c2.text_input(f"Source {i} URL", key=f"report_src_{i}_url", placeholder="https://")
-            c3.selectbox(f"Source {i} confidence", rb.SOURCE_CONFIDENCE, key=f"report_src_{i}_conf")
-
-    st.button("Clear report", on_click=clear_report)
-
-    report = rb.build_report(
-        {
-            "boxer_a": a, "boxer_b": b, "event_date": state["report_event_date"],
-            "event_name": state["report_event_name"], "venue": state["report_venue"], "country": state["report_country"],
-            "outcome": state["report_outcome"], "method": state["report_method"], "method_other": state["report_method_other"],
-            "round_stopped": state["report_round_stopped"], "stopping_time": state["report_stopping_time"],
-            "scheduled_rounds": state["report_scheduled_rounds"], "weight_class": state["report_weight_class"], "titles": state["report_titles"],
-            "scorecards": [state[f"report_card_{i}"] for i in range(1, 4)],
-            "referee": state["report_referee"], "judges": [state[f"report_judge_{i}"] for i in range(1, 4)],
-        },
-        edited.to_dict("records"),
-        [{"name": state[f"report_src_{i}_name"], "url": state[f"report_src_{i}_url"], "confidence": state[f"report_src_{i}_conf"]} for i in range(1, rb.MAX_SOURCES + 1)],
-    )
-    render_report_preview(report)
-
-
-def render_report_preview(report: dict) -> None:
+def render_found_report(report: ar.MatchReport) -> None:
     esc = html.escape
-    match, result = report["match"], report["result"]
-    st.divider()
-    st.markdown("### Match report preview")
-    title = f"{match['boxer_a'] or 'Boxer A'} vs {match['boxer_b'] or 'Boxer B'}"
-    meta = " · ".join(v for v in (match["event_name"], match["venue"], match["country"], match["event_date"]) if v)
-    st.markdown(f"<div class='value'>{esc(title)}</div><div class='muted'>{esc(meta or 'Event details not entered')}</div>", unsafe_allow_html=True)
-    st.write("")
+    fields = report.fields
+    st.markdown("### Found match report")
+    meta = " · ".join(v for v in (report.event_name, report.event_date.strftime("%d %b %Y")) if v)
+    st.markdown(f"<div class='value'>{esc(report.boxer_a)} vs {esc(report.boxer_b)}</div><div class='muted'>{esc(meta)}</div>", unsafe_allow_html=True)
+    for note in report.notes:
+        st.info(note)
+    if not report.found_anything:
+        st.error("No facts about this fight were found automatically. That does not mean the fight did not happen — check the manual source links below.")
 
-    outcome = result["winner"] or result["outcome"]
-    method = result["method"] + (f" — {result['method_detail']}" if result["method_detail"] else "")
-    if result["round_stopped"] is not None:
-        round_time = f"Round {result['round_stopped']}" + (f", {result['stopping_time']}" if result["stopping_time"] else "")
-    elif result["method"] in rb.DECISION_METHODS and result["scheduled_rounds"]:
-        round_time = f"{result['scheduled_rounds']} rounds"
-    else:
-        round_time = "—"
-    scheduled = f"Scheduled: {result['scheduled_rounds']} rounds" if result["scheduled_rounds"] else "Scheduled rounds not entered"
+    def panel(label: str, field: ar.FieldResult, extra: str = "") -> str:
+        value = field.value if field.status != ar.NOT_FOUND else "Not found"
+        return (f"<div class='panel'><div class='label'>{esc(label)}</div><div class='value'>{esc(value)}</div>"
+                f"<div class='muted' style='margin-top:8px'>{badge(field.status)} {esc(extra)}</div></div>")
+
+    winner = fields["winner"]
+    round_time = fields["round"].value if fields["round"].status != ar.NOT_FOUND else ""
+    if round_time and fields["time"].status != ar.NOT_FOUND:
+        round_time = f"Round {round_time}, {fields['time'].value}"
+    elif round_time:
+        round_time = f"Round {round_time}"
+    round_field = ar.FieldResult("round", "Round / time", min((fields["round"].status, fields["time"].status), key=ar.STATUS_RANK.get) if round_time else ar.NOT_FOUND,
+                                 round_time or "Not found", [])
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(f"<div class='panel'><div class='label'>Official outcome</div><div class='value'>{esc(outcome)}</div><div class='muted'>{esc(method or 'Method not recorded')}</div></div>", unsafe_allow_html=True)
-    c2.markdown(f"<div class='panel'><div class='label'>Round / time</div><div class='value'>{esc(round_time)}</div><div class='muted'>{esc(scheduled)}</div></div>", unsafe_allow_html=True)
-    c3.markdown(f"<div class='panel'><div class='label'>Weight class / titles</div><div class='value'>{esc(result['weight_class'] or '—')}</div><div class='muted'>{esc(result['titles'] or 'No titles entered')}</div></div>", unsafe_allow_html=True)
-    c4.markdown(f"<div class='panel'><div class='label'>Overall confidence</div><div class='value'>{badge(report['overall_confidence'])}</div><div class='muted' style='margin-top:14px'>{esc(report['confidence_explanation'])}</div></div>", unsafe_allow_html=True)
+    c1.markdown(panel("Result", winner, "winner" if winner.value not in ("Draw", "No contest", "Not found") and winner.status != ar.CONFLICTING else ""), unsafe_allow_html=True)
+    c2.markdown(panel("Method", fields["method"]), unsafe_allow_html=True)
+    c3.markdown(panel("Round / time", round_field), unsafe_allow_html=True)
+    c4.markdown(f"<div class='panel'><div class='label'>Overall confidence</div><div class='value'>{badge(report.overall)}</div>"
+                f"<div class='muted' style='margin-top:10px'>{esc(report.overall_reason)}</div></div>", unsafe_allow_html=True)
 
     st.write("")
-    main, side = st.columns([1.55, 1])
-    with main:
-        st.markdown("#### Scorecards")
-        cards = [(c["judge"] or f"Judge {i}", c["scorecard"]) for i, c in enumerate(report["scorecards"], start=1) if c["scorecard"]]
-        if cards:
-            st.markdown("\n".join(f"- {esc(judge)}: **{esc(card)}**" for judge, card in cards))
+    st.markdown("#### Facts and sources")
+    rows = []
+    for field in fields.values():
+        if field.status == ar.NOT_FOUND:
+            rows.append(f"<tr><td>{esc(field.label)}</td><td class='muted'>Not found</td><td>{badge(ar.NOT_FOUND)}</td><td>—</td></tr>")
+        elif field.status == ar.CONFLICTING or field.field in ar.MULTI_VALUE_FIELDS:
+            for i, (value, status, ids) in enumerate(field.alternatives):
+                label = esc(field.label) if i == 0 else ""
+                shown = badge(ar.CONFLICTING) + " " + badge(status) if field.status == ar.CONFLICTING else badge(status)
+                rows.append(f"<tr><td>{label}</td><td>{esc(value)}</td><td>{shown}</td><td>{source_links(report, ids)}</td></tr>")
         else:
-            st.info("No scorecards entered.")
-        st.markdown("#### Knockdown ledger")
-        if report["knockdowns"]:
-            header = "".join(f"<th>{esc(label)}</th>" for label in KD_COLUMNS.values())
-            body = ""
-            for kd in report["knockdowns"]:
-                cells = []
-                for field in KD_COLUMNS:
-                    value = kd[field]
-                    if field == "source_url" and rb.is_url(value or ""):
-                        cells.append(f"<td><a href='{esc(value, quote=True)}' target='_blank' rel='noopener noreferrer'>Source ↗</a></td>")
-                    else:
-                        cells.append(f"<td>{esc(str(value)) if value not in (None, '') else '—'}</td>")
-                body += "<tr>" + "".join(cells) + "</tr>"
-            st.markdown(f"<table class='ledger'><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table>", unsafe_allow_html=True)
-        else:
-            st.info("No knockdowns recorded.")
-        st.markdown("#### Officials")
-        judges = ", ".join(j for j in report["officials"]["judges"] if j) or "Not entered"
-        st.markdown(f"- **Referee:** {esc(report['officials']['referee'] or 'Not entered')}\n- **Judges:** {esc(judges)}")
-    with side:
-        st.markdown("#### Evidence ledger")
-        sources = [s for s in report["evidence"] if rb.is_url(s["url"])]
-        if sources:
-            for source in sources:
-                st.markdown(f"{badge(source['confidence'])} &nbsp; <a href='{esc(source['url'], quote=True)}' target='_blank' rel='noopener noreferrer'>{esc(source['name'] or source['url'])}</a>", unsafe_allow_html=True)
-        else:
-            st.info("No evidence sources with a valid URL.")
-        st.caption("Overall confidence: Confirmed = at least one official source; Corroborated = two or more corroborating sources; Single source = one; Unverified = unverified sources only.")
+            rows.append(f"<tr><td>{esc(field.label)}</td><td>{esc(field.value)}</td><td>{badge(field.status)}</td><td>{source_links(report, field.source_ids)}</td></tr>")
+    st.markdown("<table class='ledger'><thead><tr><th>Field</th><th>Finding</th><th>Status</th><th>Sources</th></tr></thead><tbody>"
+                + "".join(rows) + "</tbody></table>", unsafe_allow_html=True)
+    st.caption(STATUS_HELP)
 
-    st.markdown("#### Missing information")
-    if report["warnings"]:
-        st.warning("\n".join(f"- {esc(w)}" for w in report["warnings"]))
+    st.markdown("#### Knockdown ledger")
+    if report.knockdowns:
+        kd_rows = "".join(f"<tr><td>{esc(k.victim)}</td><td>{esc(k.scorer)}</td><td>{k.round}</td><td>{esc(k.count)}</td><td>{badge(k.status)}</td>"
+                          f"<td>{source_links(report, k.source_ids)}</td></tr>" for k in report.knockdowns)
+        st.markdown("<table class='ledger'><thead><tr><th>Fighter down</th><th>Scored by</th><th>Round</th><th>Count</th><th>Status</th><th>Sources</th></tr></thead>"
+                    f"<tbody>{kd_rows}</tbody></table>", unsafe_allow_html=True)
+        st.caption("Only knockdowns explicitly described by a source with a round are listed. A KO/TKO result is never counted as a knockdown on its own.")
     else:
-        st.success("No missing information detected. The trader must still review every source before settling manually.")
+        st.info("No knockdown was found in the sources read. This is **not** evidence that none occurred — check an official or round-by-round source.")
 
-    st.markdown("#### Download report")
-    st.caption(rb.DISCLAIMER)
-    stem = rb.file_stem(report)
-    c1, c2 = st.columns(2)
-    c1.download_button("Download JSON", rb.to_json(report), file_name=f"{stem}.json", mime="application/json", use_container_width=True)
-    c2.download_button("Download CSV", rb.to_csv(report), file_name=f"{stem}.csv", mime="text/csv", use_container_width=True)
+    st.markdown("#### Source conflicts")
+    if report.conflicts:
+        st.error("\n".join(f"- {esc(c)}" for c in report.conflicts))
+    else:
+        st.caption("No disagreements were detected between the sources read.")
+
+    st.markdown("#### Evidence ledger")
+    if not report.sources:
+        st.caption("No source pages were read.")
+    labels = dict(ar.FIELDS)
+    for source in report.sources:
+        with st.container(border=True):
+            st.markdown(f"{badge(source.tier)} &nbsp; <strong>[{source.id}] {esc(source.name)}</strong> — "
+                        f"<a href='{esc(source.url, quote=True)}' target='_blank' rel='noopener noreferrer'>{esc(source.title or source.url)}</a>",
+                        unsafe_allow_html=True)
+            st.caption(" · ".join(v for v in (f"Published {source.published}" if source.published else "", f"Found via {source.via}") if v))
+            if source.facts or source.knockdowns:
+                with st.expander("Evidence quotes"):
+                    by_quote: dict[str, list[str]] = {}
+                    for fact in source.facts:  # one quote can support several facts (e.g. a record-table row)
+                        by_quote.setdefault(fact.quote, []).append(f"{labels.get(fact.field, fact.field)}: {fact.display}")
+                    for quote, claims in by_quote.items():
+                        st.markdown(f"<div class='muted'><strong>{esc('; '.join(claims))}</strong> — “{esc(quote[:400])}”</div>", unsafe_allow_html=True)
+                    names = {"A": report.boxer_a, "B": report.boxer_b}
+                    for kd in source.knockdowns:
+                        st.markdown(f"<div class='muted'><strong>Knockdown: {esc(names[kd.victim])}, round {kd.round}</strong> — “{esc(kd.quote[:400])}”</div>", unsafe_allow_html=True)
+            for note in source.notes:
+                st.caption(note)
+
+    with st.expander(f"Retrieval log ({len(report.log)} requests)"):
+        log_rows = "".join(f"<tr><td>{esc(e.purpose)}</td><td>{esc(e.outcome)}</td><td style='word-break:break-all'>{esc(e.url)}</td></tr>" for e in report.log)
+        st.markdown(f"<table class='ledger'><thead><tr><th>Purpose</th><th>Outcome</th><th>URL</th></tr></thead><tbody>{log_rows}</tbody></table>", unsafe_allow_html=True)
 
 
 st.set_page_config(page_title="Boxing Match Information Assistant", page_icon="🥊", layout="wide")
@@ -373,12 +304,10 @@ a { color: #75b8ff !important; }
 </style>
 """, unsafe_allow_html=True)
 
-keep_report_state()
-
 with st.sidebar:
     st.markdown("## 🥊 Boxing Intelligence")
     st.caption("Post-match evidence assistant")
-    mode = st.radio("Mode", [DEMO_MODE, FREE_MODE, REPORT_MODE], index=0)
+    mode = st.radio("Mode", [DEMO_MODE, FREE_MODE, AUTO_MODE], index=0)
     st.divider()
     st.markdown("**Version 1 principle**")
     st.caption("The trader settles the market. The app supplies traceable facts and warnings.")
@@ -397,8 +326,8 @@ if mode == FREE_MODE:
     render_free_discovery()
     st.stop()
 
-if mode == REPORT_MODE:
-    render_report_builder()
+if mode == AUTO_MODE:
+    render_auto_report()
     st.stop()
 
 with st.form("fight-search"):
