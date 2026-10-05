@@ -4,7 +4,14 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Optional
 
+import html
+
 import streamlit as st
+
+from live_search import LiveSearchError, build_query, search_sources
+
+DEMO_MODE = "Demo search"
+LIVE_MODE = "Live source discovery"
 
 
 @dataclass(frozen=True)
@@ -77,6 +84,59 @@ def badge(status: str) -> str:
     return f"<span style='background:{color};color:white;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700'>{status}</span>"
 
 
+def get_brave_api_key() -> Optional[str]:
+    try:
+        key = st.secrets["BRAVE_SEARCH_API_KEY"]
+    except Exception:
+        return None
+    return str(key).strip() or None
+
+
+def render_live_discovery() -> None:
+    st.warning("Live source discovery returns **unverified source candidates** only. Nothing here confirms a result or settles a market.")
+    api_key = get_brave_api_key()
+    if not api_key:
+        st.error("Live source discovery is not configured. Add **BRAVE_SEARCH_API_KEY** in Streamlit Cloud → App settings → Secrets, then reload the app.")
+        st.code('BRAVE_SEARCH_API_KEY = "your-brave-search-api-key"', language="toml")
+        return
+
+    with st.form("live-source-search"):
+        left, middle, right = st.columns([1, 1, 0.8])
+        fighter_a = left.text_input("Boxer A", placeholder="e.g. Isaac Cruz")
+        fighter_b = middle.text_input("Boxer B", placeholder="e.g. Nestor Bravo")
+        event_date = right.date_input("Event / offered date", value=date(2026, 9, 20))
+        event_name = st.text_input("Event name (optional)", placeholder="e.g. Cruz vs Bravo")
+        submitted = st.form_submit_button("Discover source candidates", type="primary", use_container_width=True)
+
+    if not submitted:
+        st.info("Enter both boxer names and the event date to search for candidate sources.")
+        return
+    if not fighter_a.strip() or not fighter_b.strip():
+        st.error("Please enter both boxer names.")
+        return
+
+    query = build_query(fighter_a, fighter_b, event_date, event_name)
+    try:
+        with st.spinner("Searching for candidate sources…"):
+            candidates = search_sources(query, api_key)
+    except LiveSearchError as error:
+        st.error(str(error))
+        return
+
+    st.markdown("### Source candidates")
+    st.caption(f"Query: {query}")
+    if not candidates:
+        st.info("No candidate sources were returned. Try alternative spellings, aliases or the local event date.")
+        return
+    for candidate in candidates:
+        with st.container(border=True):
+            st.markdown(f"{badge('Unverified source candidate')} &nbsp; <a href='{html.escape(candidate.url, quote=True)}' target='_blank' rel='noopener noreferrer'><strong>{html.escape(candidate.title)}</strong></a>", unsafe_allow_html=True)
+            st.caption(candidate.url)
+            if candidate.snippet:
+                st.markdown(f"<div class='muted'>{html.escape(candidate.snippet)}</div>", unsafe_allow_html=True)
+    st.caption("These are search results, not verified evidence. Review each source against the operator’s own settlement rules.")
+
+
 st.set_page_config(page_title="Boxing Match Information Assistant", page_icon="🥊", layout="wide")
 st.markdown("""
 <style>
@@ -96,7 +156,7 @@ a { color: #75b8ff !important; }
 with st.sidebar:
     st.markdown("## 🥊 Boxing Intelligence")
     st.caption("Post-match evidence assistant")
-    mode = st.radio("Mode", ["Demo search", "Live search (coming next)"], index=0)
+    mode = st.radio("Mode", [DEMO_MODE, LIVE_MODE], index=0)
     st.divider()
     st.markdown("**Version 1 principle**")
     st.caption("The trader settles the market. The app supplies traceable facts and warnings.")
@@ -110,6 +170,10 @@ st.markdown("""
   <p>Find a completed fight, review the evidence, and make a confident settlement decision.</p>
 </div>
 """, unsafe_allow_html=True)
+
+if mode == LIVE_MODE:
+    render_live_discovery()
+    st.stop()
 
 with st.form("fight-search"):
     left, middle, right = st.columns([1, 1, 0.8])
