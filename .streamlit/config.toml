@@ -1,0 +1,17 @@
+# Dark, high-contrast theme. Widget text colours come from here, so labels,
+# radio options, captions and inputs stay readable on the dark background.
+[theme]
+base = "dark"
+primaryColor = "#c8102e"
+backgroundColor = "#08111f"
+secondaryBackgroundColor = "#16263b"
+textColor = "#f4f7fb"
+linkColor = "#75b8ff"
+borderColor = "#5b7594"
+showWidgetBorder = true
+
+[theme.sidebar]
+backgroundColor = "#0d1b2d"
+secondaryBackgroundColor = "#16263b"
+textColor = "#f4f7fb"
+borderColor = "#5b7594"

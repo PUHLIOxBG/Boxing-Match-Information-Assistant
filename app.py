@@ -79,8 +79,8 @@ def find_fight(fighter_a: str, fighter_b: str, selected_date: Optional[date]) ->
 
 
 def badge(status: str) -> str:
-    colors = {"Confirmed": "#1e9e61", "Corroborated": "#2787d7", "Single source": "#c98a00", "Review": "#c98a00", "Unavailable": "#7a7f87", "Conflicting": "#d54242"}
-    color = colors.get(status, "#7a7f87")
+    colors = {"Confirmed": "#147a4b", "Corroborated": "#1f6db3", "Single source": "#8a5a00", "Review": "#8a5a00", "Unavailable": "#5c6470", "Conflicting": "#b8322f"}
+    color = colors.get(status, "#5c6470")
     return f"<span style='background:{color};color:white;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700'>{status}</span>"
 
 
@@ -144,12 +144,17 @@ st.markdown("""
 [data-testid='stSidebar'] { background: #0d1b2d; }
 .hero { background: linear-gradient(120deg, #102a4a, #0b1728 55%, #8f1d2c); border: 1px solid #29425f; border-radius: 20px; padding: 28px 32px; margin-bottom: 20px; }
 .hero h1 { margin: 0; color: #fff; font-size: 2.15rem; }
-.hero p { color: #c8d4e3; margin: 8px 0 0; }
-.panel { background: #101e30; border: 1px solid #263b54; border-radius: 14px; padding: 18px; min-height: 132px; }
-.label { color: #8ea7c2; font-size: 0.78rem; text-transform: uppercase; letter-spacing: .08em; }
+.hero p { color: #e6edf5; margin: 8px 0 0; }
+.panel { background: #101e30; border: 1px solid #3a5372; border-radius: 14px; padding: 18px; min-height: 132px; }
+.label { color: #a9bdd4; font-size: 0.78rem; text-transform: uppercase; letter-spacing: .08em; }
 .value { color: #fff; font-weight: 700; font-size: 1.2rem; margin-top: 4px; }
-.muted { color: #b8c6d7; }
+.muted { color: #c3d0df; }
 a { color: #75b8ff !important; }
+[data-testid='stCaptionContainer'] { opacity: 1 !important; }
+[data-testid='stCaptionContainer'], [data-testid='stCaptionContainer'] p { color: #c3d0df !important; }
+[data-testid^='stBaseButton-primary'], [data-testid^='stBaseButton-primary'] p { color: #fff !important; }
+.stApp button:disabled { background: #142234 !important; border: 1px dashed #5b7594 !important; cursor: not-allowed; opacity: 1; }
+.stApp button:disabled, .stApp button:disabled p { color: #8597ad !important; }
 </style>
 """, unsafe_allow_html=True)
 
