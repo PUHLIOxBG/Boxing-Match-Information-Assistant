@@ -5,13 +5,12 @@ from datetime import date
 from typing import Optional
 
 import html
+from urllib.parse import urlencode
 
 import streamlit as st
 
-from live_search import LiveSearchError, build_query, search_sources
-
 DEMO_MODE = "Demo search"
-LIVE_MODE = "Live source discovery"
+FREE_MODE = "Free source discovery"
 
 
 @dataclass(frozen=True)
@@ -84,57 +83,49 @@ def badge(status: str) -> str:
     return f"<span style='background:{color};color:white;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700'>{status}</span>"
 
 
-def get_brave_api_key() -> Optional[str]:
-    try:
-        key = st.secrets["BRAVE_SEARCH_API_KEY"]
-    except Exception:
-        return None
-    return str(key).strip() or None
+def build_source_links(fighter_a: str, fighter_b: str, event_date: date, event_name: str = "") -> list[tuple[str, str, str]]:
+    """Return (label, query, url) search links. Nothing is fetched by the app."""
+    a, b = (name.replace('"', "").strip() for name in (fighter_a, fighter_b))
+    pair = f'"{a}" "{b}"'
+    when = event_date.strftime("%d %B %Y")
+    event = f' "{event_name.replace(chr(34), "").strip()}"' if event_name.strip() else ""
+    google = "https://www.google.com/search?"
+    searches = [
+        ("General result search — DuckDuckGo", f"{pair} boxing result {when}{event}", "https://duckduckgo.com/?"),
+        ("General result search — Google", f"{pair} boxing result {when}{event}", google),
+        ("BoxRec lookup — Google site:boxrec.com", f"site:boxrec.com {pair}", google),
+        ("Tapology lookup — Google site:tapology.com", f"site:tapology.com {pair}", google),
+        ("Official / promoter report search", f'{pair} boxing ("official result" OR promoter OR commission OR scorecards) {when}{event}', google),
+        ("Round-by-round / knockdown evidence search", f'{pair} boxing ("round by round" OR knockdown OR "knocked down") {when}{event}', google),
+    ]
+    return [(label, query, base + urlencode({"q": query})) for label, query, base in searches]
 
 
-def render_live_discovery() -> None:
-    st.warning("Live source discovery returns **unverified source candidates** only. Nothing here confirms a result or settles a market.")
-    api_key = get_brave_api_key()
-    if not api_key:
-        st.error("Live source discovery is not configured. Add **BRAVE_SEARCH_API_KEY** in Streamlit Cloud → App settings → Secrets, then reload the app.")
-        st.code('BRAVE_SEARCH_API_KEY = "your-brave-search-api-key"', language="toml")
-        return
+def render_free_discovery() -> None:
+    st.warning("Free source discovery builds **unverified manual source links** only. The app does not open, read or extract these pages, does not claim any result, and does not settle any market.")
+    st.caption("No account, API key, card or server-side web scraping is needed: each link simply opens a public search in a new browser tab for you to review.")
 
-    with st.form("live-source-search"):
+    with st.form("free-source-discovery"):
         left, middle, right = st.columns([1, 1, 0.8])
         fighter_a = left.text_input("Boxer A", placeholder="e.g. Isaac Cruz")
         fighter_b = middle.text_input("Boxer B", placeholder="e.g. Nestor Bravo")
         event_date = right.date_input("Event / offered date", value=date(2026, 9, 20))
         event_name = st.text_input("Event name (optional)", placeholder="e.g. Cruz vs Bravo")
-        submitted = st.form_submit_button("Discover source candidates", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("Build source links", type="primary", use_container_width=True)
 
     if not submitted:
-        st.info("Enter both boxer names and the event date to search for candidate sources.")
+        st.info("Enter both boxer names and the event date to build manual search links.")
         return
     if not fighter_a.strip() or not fighter_b.strip():
         st.error("Please enter both boxer names.")
         return
 
-    query = build_query(fighter_a, fighter_b, event_date, event_name)
-    try:
-        with st.spinner("Searching for candidate sources…"):
-            candidates = search_sources(query, api_key)
-    except LiveSearchError as error:
-        st.error(str(error))
-        return
-
-    st.markdown("### Source candidates")
-    st.caption(f"Query: {query}")
-    if not candidates:
-        st.info("No candidate sources were returned. Try alternative spellings, aliases or the local event date.")
-        return
-    for candidate in candidates:
+    st.markdown("### Manual source links")
+    for label, query, url in build_source_links(fighter_a, fighter_b, event_date, event_name):
         with st.container(border=True):
-            st.markdown(f"{badge('Unverified source candidate')} &nbsp; <a href='{html.escape(candidate.url, quote=True)}' target='_blank' rel='noopener noreferrer'><strong>{html.escape(candidate.title)}</strong></a>", unsafe_allow_html=True)
-            st.caption(candidate.url)
-            if candidate.snippet:
-                st.markdown(f"<div class='muted'>{html.escape(candidate.snippet)}</div>", unsafe_allow_html=True)
-    st.caption("These are search results, not verified evidence. Review each source against the operator’s own settlement rules.")
+            st.markdown(f"{badge('Unverified manual source link')} &nbsp; <a href='{html.escape(url, quote=True)}' target='_blank' rel='noopener noreferrer'><strong>{html.escape(label)}</strong> ↗</a>", unsafe_allow_html=True)
+            st.caption(f"Search: {query}")
+    st.caption("Search results are not verified evidence. Review each source against the operator’s own settlement rules.")
 
 
 st.set_page_config(page_title="Boxing Match Information Assistant", page_icon="🥊", layout="wide")
@@ -161,7 +152,7 @@ a { color: #75b8ff !important; }
 with st.sidebar:
     st.markdown("## 🥊 Boxing Intelligence")
     st.caption("Post-match evidence assistant")
-    mode = st.radio("Mode", [DEMO_MODE, LIVE_MODE], index=0)
+    mode = st.radio("Mode", [DEMO_MODE, FREE_MODE], index=0)
     st.divider()
     st.markdown("**Version 1 principle**")
     st.caption("The trader settles the market. The app supplies traceable facts and warnings.")
@@ -176,8 +167,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-if mode == LIVE_MODE:
-    render_live_discovery()
+if mode == FREE_MODE:
+    render_free_discovery()
     st.stop()
 
 with st.form("fight-search"):

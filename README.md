@@ -11,15 +11,11 @@ streamlit run app.py
 
 The current build runs in **Demo mode** with the 13 supplied matches. It is deliberately evidence-first: market settlement is not automated.
 
-## Live source discovery
+## Free source discovery
 
-Select **Live source discovery** in the sidebar to search the Brave Web Search API for candidate sources. Every result is labelled *Unverified source candidate*; nothing is confirmed or settled automatically.
+Select **Free source discovery** in the sidebar and enter both boxers, the event/offered date and an optional event name. The app builds search links (DuckDuckGo, Google, BoxRec and Tapology lookups, official/promoter reports, round-by-round/knockdown evidence) that open in a new browser tab.
 
-Add the API key in Streamlit Cloud → App settings → Secrets (or locally in `.streamlit/secrets.toml`, which is git-ignored):
-
-```toml
-BRAVE_SEARCH_API_KEY = "your-brave-search-api-key"
-```
+Every link is labelled *Unverified manual source link*. The app makes no network requests, needs no account, API key or card, does no scraping or extraction, and never confirms a result or settles a market.
 
 ## Deploy
 
